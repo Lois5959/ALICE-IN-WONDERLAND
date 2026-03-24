@@ -56,7 +56,7 @@ def nettoie_livre(texte_brut):
     texte_propre = texte_brut[vrai_debut:index_fin]
     
     return texte_propre.strip() 
-id_du_livre = int(args.lexdiv or args.topics or args.entities)
+id_du_livre = int(args.lexdiv or args.topics or args.entities or args.card)
 texte_normal = telecharge_livre(id_du_livre)
 texte_propre = nettoie_livre(texte_normal)
 
@@ -66,6 +66,8 @@ for signe in ponctuation:
     texte_propre = texte_propre.replace(signe, " ")
 
 mots = texte_propre.lower().split()
+
+
 
 #--lexdiv
 if args.lexdiv is not None:
@@ -82,6 +84,8 @@ if args.lexdiv is not None:
                 "mwl":mwl_mots, 
                 "mwf":mwf_mots }
     print(dico_propre)
+    
+
 
 #--topics 10 mots pour parler du livre
 if args.topics is not None:
@@ -89,6 +93,8 @@ if args.topics is not None:
     mots_propres = [m for m in mots if m not in mots_enleve and len(m) > 3]
     mots_important_clean = Counter(mots_propres).most_common(10) 
     print(mots_important_clean)
+
+
 
 #--entities liste nom propre
 if args.entities is not None:
@@ -108,23 +114,6 @@ if args.entities is not None:
 
 
 
-
-                 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                 
 #--card
 if args.card is not None:
     id_du_livre = int(args.card)
@@ -133,7 +122,7 @@ if args.card is not None:
     texte_propre = nettoie_livre(texte_normal)
 
     # nettoyage ponctuation
-    ponctuation = ".,!?;:()[]\"'*-—"
+    ponctuation = ".,!?;:()[]\"'*-—“"
     for signe in ponctuation:
         texte_propre = texte_propre.replace(signe, " ")
 
@@ -171,8 +160,11 @@ if args.card is not None:
     # -------- topics --------
     mots_enleve = get_stop_words('en')
     mots_propres = [m for m in mots if m not in mots_enleve and len(m) > 3]
+
+# 40 mots plus fréquents
     freq = Counter(mots_propres).most_common(40)
 
+#coupe en groupe de 10
     topics = {
         1: [w for w, _ in freq[0:10]],
         2: [w for w, _ in freq[10:20]],
@@ -192,27 +184,49 @@ if args.card is not None:
         "locations": [loc for loc, _ in Counter(lieux).most_common(10)]
     }
 
-    # -------- summary --------
-    phrases = texte_propre.split(".")
-    summary = ". ".join(phrases[:5]).strip() + "."
-
-    # -------- similar --------
-    similar = [
-        "Through the Looking-Glass",
-        "The Wonderful Wizard of Oz",
-        "Peter Pan",
-        "Grimm's Fairy Tales",
-        "The Secret Garden"
-    ]
-
     # -------- card final --------
     card = {
         "info": info,
         "lexdiv": lexdiv,
         "topics": topics,
         "entities": entities,
-        "summary": summary,
-        "similar": similar
     }
 
     print(card)
+
+
+
+
+# --summarize
+if args.summarize is not None:
+    nlp = spacy.load("en_core_web_sm")
+    
+    # first 50 000 charactere (words)------
+    doc = nlp(texte_propre[:50000])
+    
+    # 2----word frequency------
+    mots_utiles = [token.text.lower() for token in doc 
+                   if not token.is_stop and not token.is_punct and len(token.text.strip()) > 3]
+    frequence_mots = Counter(mots_utiles)
+    
+    # 3 ------give score sentence------
+    score_phrases = {}
+    for sent in doc.sents:
+        for word in sent:
+            word_clean = word.text.lower()
+            if word_clean in frequence_mots:
+                if sent not in score_phrases:
+                    score_phrases[sent] = frequence_mots[word_clean]
+                else:
+                    score_phrases[sent] += frequence_mots[word_clean]
+    
+    # 4------ best score sentence-----
+    import heapq
+    meilleures_phrases = heapq.nlargest(3, score_phrases, key=score_phrases.get)
+    
+    #-----final clear------
+    resume_final = " ".join([p.text.replace('\n', ' ').strip() for p in meilleures_phrases])
+    
+    print(f"\nSummary of book {id_du_livre}:")
+    print(resume_final)
+
