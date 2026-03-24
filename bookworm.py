@@ -105,6 +105,26 @@ if args.entities is not None:
     
     displacy.serve(doc, style="ent")
 
+
+
+
+
+                 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                 
 #--card
 if args.card is not None:
     id_du_livre = int(args.card)
