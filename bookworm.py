@@ -105,3 +105,94 @@ if args.entities is not None:
     
     displacy.serve(doc, style="ent")
 
+#--card
+if args.card is not None:
+    id_du_livre = int(args.card)
+
+    texte_normal = telecharge_livre(id_du_livre)
+    texte_propre = nettoie_livre(texte_normal)
+
+    # nettoyage ponctuation
+    ponctuation = ".,!?;:()[]\"'*-—"
+    for signe in ponctuation:
+        texte_propre = texte_propre.replace(signe, " ")
+
+    mots = texte_propre.lower().split()
+
+    # -------- info --------
+    auteurs = ""
+    bookshelf = ""
+
+    for ligne in texte_normal.split("\n"):
+        if ligne.startswith("Author:"):
+            auteurs = ligne.replace("Author:", "").strip()
+        if ligne.startswith("Bookshelf:"):
+            bookshelf = ligne.replace("Bookshelf:", "").strip()
+
+    info = {
+        "id": str(id_du_livre),
+        "authors": auteurs,
+        "bookshelves": bookshelf
+    }
+
+    # -------- lexdiv --------
+    typ_mots = set(mots)
+    hap_mots = Counter(mots)
+
+    lexdiv = {
+        "tok": len(mots),
+        "typ": len(typ_mots),
+        "hap": list(hap_mots.values()).count(1),
+        "ttr": len(typ_mots) / len(mots),
+        "mwl": sum(len(m) for m in mots) / len(mots),
+        "mwf": len(mots) / len(typ_mots)
+    }
+
+    # -------- topics --------
+    mots_enleve = get_stop_words('en')
+    mots_propres = [m for m in mots if m not in mots_enleve and len(m) > 3]
+    freq = Counter(mots_propres).most_common(40)
+
+    topics = {
+        1: [w for w, _ in freq[0:10]],
+        2: [w for w, _ in freq[10:20]],
+        3: [w for w, _ in freq[20:30]],
+        4: [w for w, _ in freq[30:40]],
+    }
+
+    # -------- entities --------
+    nlp = spacy.load("en_core_web_sm")
+    doc = nlp(texte_normal[:50000])
+
+    personnages = [ent.text for ent in doc.ents if ent.label_ == "PERSON"]
+    lieux = [ent.text for ent in doc.ents if ent.label_ in ["GPE", "LOC"]]
+
+    entities = {
+        "characters": [nom for nom, _ in Counter(personnages).most_common(10)],
+        "locations": [loc for loc, _ in Counter(lieux).most_common(10)]
+    }
+
+    # -------- summary --------
+    phrases = texte_propre.split(".")
+    summary = ". ".join(phrases[:5]).strip() + "."
+
+    # -------- similar --------
+    similar = [
+        "Through the Looking-Glass",
+        "The Wonderful Wizard of Oz",
+        "Peter Pan",
+        "Grimm's Fairy Tales",
+        "The Secret Garden"
+    ]
+
+    # -------- card final --------
+    card = {
+        "info": info,
+        "lexdiv": lexdiv,
+        "topics": topics,
+        "entities": entities,
+        "summary": summary,
+        "similar": similar
+    }
+
+    print(card)
