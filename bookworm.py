@@ -114,7 +114,6 @@ if args.entities is not None:
 
 
 
-
 #--card
 if args.card is not None:
     id_du_livre = int(args.card)
@@ -195,5 +194,39 @@ if args.card is not None:
 
     print(card)
 
+
+
+
+# --summarize
 if args.summarize is not None:
+    nlp = spacy.load("en_core_web_sm")
     
+    # first 50 000 charactere (words)------
+    doc = nlp(texte_propre[:50000])
+    
+    # 2----word frequency------
+    mots_utiles = [token.text.lower() for token in doc 
+                   if not token.is_stop and not token.is_punct and len(token.text.strip()) > 3]
+    frequence_mots = Counter(mots_utiles)
+    
+    # 3 ------give score sentence------
+    score_phrases = {}
+    for sent in doc.sents:
+        for word in sent:
+            word_clean = word.text.lower()
+            if word_clean in frequence_mots:
+                if sent not in score_phrases:
+                    score_phrases[sent] = frequence_mots[word_clean]
+                else:
+                    score_phrases[sent] += frequence_mots[word_clean]
+    
+    # 4------ best score sentence-----
+    import heapq
+    meilleures_phrases = heapq.nlargest(3, score_phrases, key=score_phrases.get)
+    
+    #-----final clear------
+    resume_final = " ".join([p.text.replace('\n', ' ').strip() for p in meilleures_phrases])
+    
+    print(f"\nSummary of book {id_du_livre}:")
+    print(resume_final)
+
