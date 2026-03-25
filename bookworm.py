@@ -56,7 +56,7 @@ def nettoie_livre(texte_brut):
     texte_propre = texte_brut[vrai_debut:index_fin]
     
     return texte_propre.strip() 
-id_du_livre = int(args.lexdiv or args.topics or args.entities or args.card)
+id_du_livre = int(args.lexdiv or args.topics or args.entities or args.card or args.summarize)
 texte_normal = telecharge_livre(id_du_livre)
 texte_propre = nettoie_livre(texte_normal)
 
