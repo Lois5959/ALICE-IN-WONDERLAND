@@ -194,3 +194,6 @@ if args.card is not None:
     }
 
     print(card)
+
+if args.summarize is not None:
+    
