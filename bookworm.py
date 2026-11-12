@@ -1,314 +1,288 @@
+"""Bookworm : Alice's Adventures in NLP.
+
+Analyse de livres du Projet Gutenberg en ligne de commande :
+diversité lexicale, thèmes, personnages, résumé, livres similaires et fiche complète.
+
+Exemples :
+    python bookworm.py --lexdiv 11
+    python bookworm.py --card 11
+"""
 import argparse
-import requests
-import os
-import json
 import heapq
+import json
+import os
+import sys
 from collections import Counter
+
+import requests
 from stop_words import get_stop_words
-import spacy
-from spacy import displacy
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
-bibliotheque = {
-    11: "Alice's Adventures in Wonderland",
-    12: "Through the Looking-Glass",
-    16: "Peter Pan",
-    55: "The Wonderful Wizard of Oz Children",
-    113: "The Secret Garden Children", 
-    120: "Treasure Island Children" ,
-    236: "The Jungle Book Children",
-    108: "The Return of Sherlock Holmes Crime",
-    834: "The Memoirs of Sherlock Holmes Crime",
-    863: "The Mysterious Affair at Styles Crime",
-    1661: "The Adventures of Sherlock Holmes Crime", 
-    61262: "Poirot Investigates Crime",
-    69087: "The murder of Roger Ackroyd Crime", 
-    70114: "The Big Four Crime", 
-    35: "The Time Machine",
-    36: "The War of the Worlds",
-    84:"Frankenstein; Or, The Modern Prometheus", 
-    159: "The island of Doctor Moreau", 
-    164:"Twenty Thousand Leagues under the Sea",
-    345: "Dracula"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+# id Gutenberg -> (titre, rayon)
+BIBLIOTHEQUE = {
+    11: ("Alice's Adventures in Wonderland", "Children"),
+    12: ("Through the Looking-Glass", "Children"),
+    16: ("Peter Pan", "Children"),
+    55: ("The Wonderful Wizard of Oz", "Children"),
+    113: ("The Secret Garden", "Children"),
+    120: ("Treasure Island", "Children"),
+    236: ("The Jungle Book", "Children"),
+    108: ("The Return of Sherlock Holmes", "Crime"),
+    834: ("The Memoirs of Sherlock Holmes", "Crime"),
+    863: ("The Mysterious Affair at Styles", "Crime"),
+    1661: ("The Adventures of Sherlock Holmes", "Crime"),
+    61262: ("Poirot Investigates", "Crime"),
+    69087: ("The Murder of Roger Ackroyd", "Crime"),
+    70114: ("The Big Four", "Crime"),
+    35: ("The Time Machine", "Science Fiction"),
+    36: ("The War of the Worlds", "Science Fiction"),
+    84: ("Frankenstein; Or, The Modern Prometheus", "Science Fiction"),
+    159: ("The Island of Doctor Moreau", "Science Fiction"),
+    164: ("Twenty Thousand Leagues under the Sea", "Science Fiction"),
+    345: ("Dracula", "Gothic"),
 }
-    
+
+PONCTUATION = ".,!?;:()[]\"'*-—_“”‘’"
+TAILLE_EXTRAIT = 50000  # caractères analysés par spaCy (résumé, entités)
+
+_nlp = None
 
 
+# ---------- chargement ----------
 
-def les_args():
-    parser = argparse.ArgumentParser(description='Bookworm: Alice\'s Adventures in NLP')
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--lexdiv', type = int)
-    group.add_argument('--topics', type = int)
-    group.add_argument('--entities', type = float )
-    group.add_argument('--summarize', type = float )
-    group.add_argument('--card', type=int) 
-    group.add_argument('--similar', type=int) 
-    
-    args = parser.parse_args()
-    return args
+def telecharge_livre(id_livre):
+    """Retourne le texte brut du livre, depuis le cache data/ ou Gutenberg."""
+    nom_fichier = os.path.join(DATA_DIR, f"{id_livre}.txt")
 
-args = les_args()
-
-
-
-
-def telecharge_livre(id):
-    nom_fichier = f"data/{id}.txt"
-    
-    # Le fichier existe déjà ou pas?
     if os.path.exists(nom_fichier):
-        with open(nom_fichier, 'r', encoding='utf-8') as f:
+        with open(nom_fichier, "r", encoding="utf-8") as f:
             return f.read()
-    
-    # Sinon télécharge
-    print(f"Téléchargement du livre {id}...")
-    url = f'https://www.gutenberg.org/cache/epub/{id}/pg{id}.txt'
-    response = requests.get(url)
+
+    print(f"Téléchargement du livre {id_livre}...", file=sys.stderr)
+    url = f"https://www.gutenberg.org/cache/epub/{id_livre}/pg{id_livre}.txt"
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
-    
-    # Enregistre pour la prochaine fois (Persistance)
-    if not os.path.exists('data'): os.makedirs('data')
-    with open(nom_fichier, 'w', encoding='utf-8') as f:
+    response.encoding = "utf-8"
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(nom_fichier, "w", encoding="utf-8") as f:
         f.write(response.text)
-        
+
     return response.text
 
 
-
-
 def nettoie_livre(texte_brut):
+    """Garde seulement le texte du livre, entre les marqueurs START et END de Gutenberg."""
     balise_debut = "*** START OF THE PROJECT GUTENBERG EBOOK"
     balise_fin = "*** END OF THE PROJECT GUTENBERG EBOOK"
 
-    # Trouve les positions
     index_debut = texte_brut.find(balise_debut)
     index_fin = texte_brut.find(balise_fin)
 
-    # Cherche la fin de la ligne après le marqueur de début
-    vrai_debut = texte_brut.find("***", index_debut + len(balise_debut)) + 3
-
-    # Extrait la partie entre les deux
-    texte_propre = texte_brut[vrai_debut:index_fin]
-    
-    return texte_propre.strip() 
-
-valeur_id = int(args.lexdiv or args.topics or args.entities or args.card or args.summarize or args.similar)
-id_du_livre = int(valeur_id) if valeur_id is not None else None
-texte_normal = telecharge_livre(id_du_livre)
-texte_propre = nettoie_livre(texte_normal)
-
-if id_du_livre not in bibliotheque:
-    print(f"L'id {id_du_livre} ne fait pas partie de la bibliothèque")
-    exit(1)
-
-
-
-
-def generer_resume(texte_propre, id_du_livre):
-    nlp = spacy.load("en_core_web_sm")
-    doc = nlp(texte_propre[:50000])
-    
-    mots_utiles = [token.text.lower() for token in doc 
-                   if not token.is_stop and not token.is_punct and len(token.text.strip()) > 3]
-    frequence_mots = Counter(mots_utiles)
-    
-    score_phrases = {}
-    for sent in doc.sents:
-        for word in sent:
-            word_clean = word.text.lower()
-            if word_clean in frequence_mots:
-                score_phrases[sent] = score_phrases.get(sent, 0) + frequence_mots[word_clean]
-    
-    meilleures_phrases = heapq.nlargest(3, score_phrases, key=score_phrases.get)
-    return " ".join([p.text.replace('\n', ' ').strip() for p in meilleures_phrases])
-
-
-
-def obtenir_similarites(id_cible, bibliotheque):
-    id_a_traiter = list(bibliotheque.keys())
-    corpus_texte = []
-    
-    for book_id in id_a_traiter:
-        raw = telecharge_livre(book_id) 
-        clean = nettoie_livre(raw)     
-        corpus_texte.append(clean)
-
-    tfidf = TfidfVectorizer(stop_words='english')
-    resultat = tfidf.fit_transform(corpus_texte)
-    
-    idx = id_a_traiter.index(id_cible)
-    scores = cosine_similarity(resultat[idx], resultat)[0]
-    
-    # Top 5
-    recos = []
-    for i in range(len(id_a_traiter)):
-        recos.append((bibliotheque[id_a_traiter[i]], scores[i]))
-    
-    recos_triees = sorted(recos, key=lambda x: x[1], reverse=True)
-    return [livre[0] for livre in recos_triees[1:6]]
-
-
-
-# suppression de la ponctuation
-ponctuation = ".,!?;:()[]\"'*-—" 
-for signe in ponctuation:
-    texte_propre = texte_propre.replace(signe, " ")
-
-mots = texte_propre.lower().split()
-
-
-
-#--lexdiv
-if args.lexdiv is not None:
-    typ_mots = set(mots)
-    ttr_mots = len(typ_mots) / len(mots)
-    mwl_mots = sum(len(m) for m in mots) / len(mots)
-    mwf_mots = len(mots) / len(typ_mots)
-    hap_mots = Counter(mots)
-    mot = hap_mots.values()
-    dico_propre = {"tok": len(mots),
-                "typ": len(typ_mots),
-                "hap": list(mot).count(1), 
-                "ttr": ttr_mots, 
-                "mwl":mwl_mots, 
-                "mwf":mwf_mots }
-    print(dico_propre)
-    
-
-
-#--topics 10 mots pour parler du livre
-if args.topics is not None:
-    mots_enleve = get_stop_words('en')
-    mots_propres = [m for m in mots if m not in mots_enleve and len(m) > 3]
-    mots_important_clean = Counter(mots_propres).most_common(10) 
-    print(mots_important_clean)
-
-    with open("data/clean_temp.txt", "w") as f:
-        f.write(" ".join(mots_propres))
-
-
-
-#--entities liste nom propre
-if args.entities is not None:
-    nlp = spacy.load("en_core_web_sm")
-    limite = int(len(texte_normal) * args.entities)
-    extrait = texte_normal[:limite]
-    doc = nlp(extrait)
-
-    personnages = [ent.text for ent in doc.ents if ent.label_ == "PERSON"]
-    top_perso = Counter(personnages).most_common(10)
-    print("Top personnages:")
-    for nom, count in top_perso:
-        print(f"- {nom} : {count}")
-    
-    displacy.serve(doc, style="ent")
-
-
-
-# --summarize
-if args.summarize is not None:
-    resume = generer_resume(texte_propre, id_du_livre)
-    print(f"\nSummary of book {id_du_livre}:\n{resume}")
-
-
-
-#--similar
-if args.similar is not None:
-    id_user = int(args.similar)
-    if id_user in bibliotheque:
-        print(obtenir_similarites(id_user, bibliotheque))
+    if index_debut == -1:
+        debut = 0
     else:
-        print("id inconnu")
+        # le marqueur de début se termine par "***" sur la même ligne
+        debut = texte_brut.find("***", index_debut + len(balise_debut)) + 3
+    fin = index_fin if index_fin != -1 else len(texte_brut)
+
+    return texte_brut[debut:fin].strip()
 
 
+def decoupe_mots(texte):
+    """Retire la ponctuation et renvoie la liste des mots en minuscules."""
+    for signe in PONCTUATION:
+        texte = texte.replace(signe, " ")
+    return texte.lower().split()
 
-#--card
-if args.card is not None:
-    id_du_livre = int(args.card)
 
-    texte_normal = telecharge_livre(id_du_livre)
-    texte_propre = nettoie_livre(texte_normal)
+def charge_nlp():
+    """Charge le modèle spaCy une seule fois."""
+    global _nlp
+    if _nlp is None:
+        import spacy
+        try:
+            _nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            sys.exit("Modèle spaCy manquant : python -m spacy download en_core_web_sm")
+    return _nlp
 
-    # nettoyage ponctuation
-    ponctuation = ".,!?;:()[]\"'*-—“"
-    for signe in ponctuation:
-        texte_propre = texte_propre.replace(signe, " ")
 
-    mots = texte_propre.lower().split()
+# ---------- analyses ----------
 
-    # -------- info --------
+def lexdiv(mots):
+    """Mesures de diversité lexicale."""
+    if not mots:
+        return {"tok": 0, "typ": 0, "hap": 0, "ttr": 0.0, "mwl": 0.0, "mwf": 0.0}
+    types = set(mots)
+    frequences = Counter(mots)
+    return {
+        "tok": len(mots),                                   # nombre de mots
+        "typ": len(types),                                  # mots différents
+        "hap": list(frequences.values()).count(1),          # mots vus une seule fois
+        "ttr": len(types) / len(mots),                      # type/token ratio
+        "mwl": sum(len(m) for m in mots) / len(mots),       # longueur moyenne d'un mot
+        "mwf": len(mots) / len(types),                      # fréquence moyenne d'un mot
+    }
+
+
+def mots_significatifs(mots):
+    """Mots sans les mots vides (the, and...) et de plus de 3 lettres."""
+    mots_vides = set(get_stop_words("en"))
+    return [m for m in mots if m not in mots_vides and len(m) > 3]
+
+
+def topics(mots, nb_groupes=1):
+    """Mots les plus fréquents, en groupes de 10."""
+    frequents = [mot for mot, _ in Counter(mots_significatifs(mots)).most_common(10 * nb_groupes)]
+    return {i + 1: frequents[i * 10:(i + 1) * 10] for i in range(nb_groupes)}
+
+
+def entites(texte):
+    """Personnages et lieux les plus cités (reconnaissance d'entités nommées)."""
+    doc = charge_nlp()(texte[:TAILLE_EXTRAIT])
+    personnages = [ent.text.strip() for ent in doc.ents if ent.label_ == "PERSON"]
+    lieux = [ent.text.strip() for ent in doc.ents if ent.label_ in ("GPE", "LOC")]
+    return {
+        "characters": [nom for nom, _ in Counter(personnages).most_common(10)],
+        "locations": [lieu for lieu, _ in Counter(lieux).most_common(10)],
+    }, doc
+
+
+def resume(texte, nb_phrases=3):
+    """Résumé extractif : garde les phrases qui contiennent les mots les plus fréquents."""
+    doc = charge_nlp()(texte[:TAILLE_EXTRAIT])
+
+    mots_utiles = [token.text.lower() for token in doc
+                   if not token.is_stop and not token.is_punct and len(token.text.strip()) > 3]
+    frequence = Counter(mots_utiles)
+
+    score_phrases = {}
+    for phrase in doc.sents:
+        # on ignore les phrases trop courtes (dialogues) ou trop longues (paragraphes entiers)
+        if not 8 <= len(phrase) <= 40:
+            continue
+        score_phrases[phrase] = sum(frequence.get(token.text.lower(), 0) for token in phrase)
+
+    meilleures = heapq.nlargest(nb_phrases, score_phrases, key=score_phrases.get)
+    meilleures.sort(key=lambda phrase: phrase.start)  # remet dans l'ordre du livre
+    return " ".join(" ".join(p.text.split()) for p in meilleures)
+
+
+def similaires(id_cible, nb=5):
+    """Livres les plus proches (TF-IDF + similarité cosinus sur toute la bibliothèque)."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    ids = list(BIBLIOTHEQUE)
+    corpus = [nettoie_livre(telecharge_livre(book_id)) for book_id in ids]
+
+    matrice = TfidfVectorizer(stop_words="english").fit_transform(corpus)
+    scores = cosine_similarity(matrice[ids.index(id_cible)], matrice)[0]
+
+    classement = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
+    return [BIBLIOTHEQUE[book_id][0] for book_id, _ in classement if book_id != id_cible][:nb]
+
+
+def info(id_livre, texte_brut):
+    """Métadonnées lues dans l'en-tête Gutenberg."""
     auteurs = ""
-    bookshelf = ""
-    cover_url = f"https://www.gutenberg.org/cache/epub/{id_du_livre}/pg{id_du_livre}.cover.medium.jpg"
-
-    for ligne in texte_normal.split("\n"):
+    for ligne in texte_brut.split("\n"):
         if ligne.startswith("Author:"):
             auteurs = ligne.replace("Author:", "").strip()
-        if ligne.startswith("Bookshelf:"):
-            bookshelf = ligne.replace("Bookshelf:", "").strip()
-
-    info = {
-        "id": str(id_du_livre),
+            break
+    titre, rayon = BIBLIOTHEQUE[id_livre]
+    return {
+        "id": str(id_livre),
+        "title": titre,
         "authors": auteurs,
-        "bookshelves": bookshelf,
-        "cover": cover_url
-    }
-    
-
-    # -------- lexdiv --------
-    typ_mots = set(mots)
-    hap_mots = Counter(mots)
-
-    lexdiv = {
-        "tok": len(mots),
-        "typ": len(typ_mots),
-        "hap": list(hap_mots.values()).count(1),
-        "ttr": len(typ_mots) / len(mots),
-        "mwl": sum(len(m) for m in mots) / len(mots),
-        "mwf": len(mots) / len(typ_mots)
+        "bookshelves": rayon,
+        "cover": f"https://www.gutenberg.org/cache/epub/{id_livre}/pg{id_livre}.cover.medium.jpg",
     }
 
-    # -------- topics --------
-    mots_enleve = get_stop_words('en')
-    mots_propres = [m for m in mots if m not in mots_enleve and len(m) > 3]
 
-# 40 mots plus fréquents
-    freq = Counter(mots_propres).most_common(40)
-
-#coupe en groupe de 10
-    topics = {
-        1: [w for w, _ in freq[0:10]],
-        2: [w for w, _ in freq[10:20]],
-        3: [w for w, _ in freq[20:30]],
-        4: [w for w, _ in freq[30:40]],
-    }
-
-    # -------- entities --------
-    nlp = spacy.load("en_core_web_sm")
-    doc = nlp(texte_normal[:50000])
-
-    personnages = [ent.text for ent in doc.ents if ent.label_ == "PERSON"]
-    lieux = [ent.text for ent in doc.ents if ent.label_ in ["GPE", "LOC"]]
-
-    entities = {
-        "characters": [nom for nom, _ in Counter(personnages).most_common(10)],
-        "locations": [loc for loc, _ in Counter(lieux).most_common(10)]
-    }
-    
-    # -------- card final --------
-    card = {
-        "info": info,
-        "lexdiv": lexdiv,
-        "topics": topics,
+def fiche(id_livre, texte_brut, texte):
+    """Fiche complète du livre (toutes les analyses)."""
+    mots = decoupe_mots(texte)
+    entities, _ = entites(texte)
+    return {
+        "info": info(id_livre, texte_brut),
+        "lexdiv": lexdiv(mots),
+        "topics": topics(mots, nb_groupes=4),
         "entities": entities,
-        "summary": generer_resume(texte_propre, id_du_livre), 
-        "similar": obtenir_similarites(id_du_livre, bibliotheque)
-        
+        "summary": resume(texte),
+        "similar": similaires(id_livre),
     }
-    print(f"IMAGE DU LIVRE : {info['cover']}")
-    print("="*50)
-    
-    card_lisible = json.dumps(card, indent=4, ensure_ascii=False)
-    print(card_lisible)
+
+
+# ---------- ligne de commande ----------
+
+def les_args(argv=None):
+    parser = argparse.ArgumentParser(description="Bookworm: Alice's Adventures in NLP")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--lexdiv", type=int, metavar="ID", help="diversité lexicale")
+    group.add_argument("--topics", type=int, metavar="ID", help="10 mots qui résument le livre")
+    group.add_argument("--entities", type=int, metavar="ID", help="personnages principaux")
+    group.add_argument("--summarize", type=int, metavar="ID", help="résumé en 3 phrases")
+    group.add_argument("--similar", type=int, metavar="ID", help="5 livres les plus proches")
+    group.add_argument("--card", type=int, metavar="ID", help="fiche complète en JSON")
+    group.add_argument("--list", action="store_true", help="liste des livres disponibles")
+    parser.add_argument("--serve", action="store_true",
+                        help="avec --entities : affiche les entités dans le navigateur (displaCy)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = les_args(argv)
+
+    if args.list:
+        for book_id, (titre, rayon) in BIBLIOTHEQUE.items():
+            print(f"{book_id:>6}  {titre}  ({rayon})")
+        return 0
+
+    id_livre = next(v for v in (args.lexdiv, args.topics, args.entities,
+                                args.summarize, args.similar, args.card) if v is not None)
+
+    # on vérifie l'id AVANT de télécharger quoi que ce soit
+    if id_livre not in BIBLIOTHEQUE:
+        print(f"L'id {id_livre} ne fait pas partie de la bibliothèque (voir --list)", file=sys.stderr)
+        return 1
+
+    try:
+        texte_brut = telecharge_livre(id_livre)
+    except requests.RequestException as e:
+        print(f"Impossible de télécharger le livre {id_livre} : {e}", file=sys.stderr)
+        return 1
+    texte = nettoie_livre(texte_brut)
+
+    if args.lexdiv is not None:
+        print(lexdiv(decoupe_mots(texte)))
+
+    elif args.topics is not None:
+        print(topics(decoupe_mots(texte))[1])
+
+    elif args.entities is not None:
+        entities, doc = entites(texte)
+        print("Top personnages :")
+        for nom in entities["characters"]:
+            print(f"- {nom}")
+        if args.serve:
+            from spacy import displacy
+            displacy.serve(doc, style="ent")
+
+    elif args.summarize is not None:
+        print(f"Summary of book {id_livre}:\n{resume(texte)}")
+
+    elif args.similar is not None:
+        for titre in similaires(id_livre):
+            print(f"- {titre}")
+
+    elif args.card is not None:
+        print(json.dumps(fiche(id_livre, texte_brut, texte), indent=4, ensure_ascii=False))
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
